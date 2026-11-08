@@ -1,0 +1,6 @@
+{
+  "name": "SANDRINO - Micro-Missions & Mobile Money",
+  "description": "Plateforme africaine de micro-missions rémunérées (tests d'apps, sondages, avis). Rémunérations instantanées en Mobile Money (TMoney, Flooz, Orange Money, MTN MoMo, Wave).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

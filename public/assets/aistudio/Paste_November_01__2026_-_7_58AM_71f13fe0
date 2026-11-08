@@ -1,0 +1,872 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  MEMBER
+  COMPANY
+  ADMIN
+}
+
+enum PlanType {
+  FREE
+  STARTER
+  PREMIUM
+  BUSINESS
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  PENDING_PAYMENT
+}
+
+enum MissionCategory {
+  APP_TEST
+  PAID_SURVEY
+  PRODUCT_REVIEW
+  CONTENT_CREATION
+  DIGITAL_SERVICE
+  RESEARCH
+  AD_CAMPAIGN
+}
+
+enum SubmissionStatus {
+  IN_PROGRESS
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+}
+
+enum TransactionType {
+  SUBSCRIPTION_PAYMENT
+  CAMPAIGN_FUNDING
+  MISSION_REWARD
+  WITHDRAWAL
+  SERVICE_FEE
+  REFERRAL_COMMISSION
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+enum WithdrawalStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  REJECTED
+  FAILED
+}
+
+enum MobileMoneyProvider {
+  TMONEY
+  FLOOZ
+  LEEKPAY
+  ORANGE_MONEY
+  MTN_MOMO
+  WAVE
+}
+
+model User {
+  id               String            @id @default(uuid())
+  email            String            @unique
+  passwordHash     String
+  fullName         String
+  phone            String            @unique
+  country          String            // Code ISO (ex: "TG", "BJ", "CI")
+  role             Role              @default(MEMBER)
+  avatarUrl        String?
+  referralCode     String            @unique
+  referredById     String?
+  referredBy       User?             @relation("UserReferrals", fields: [referredById], references: [id])
+  referrals        User[]            @relation("UserReferrals")
+  
+  wallet           Wallet?
+  companyProfile   CompanyProfile?
+  subscriptions    Subscription[]
+  submissions      MissionSubmission[]
+  auditLogs        AuditLog[]
+  withdrawalRequests WithdrawalRequest[]
+
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  @@index([email])
+  @@index([referralCode])
+}
+
+model CompanyProfile {
+  id              String      @id @default(uuid())
+  userId          String      @unique
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  companyName     String
+  registrationNum String?
+  taxId           String?
+  website         String?
+  address         String?
+  isVerified      Boolean     @default(false)
+  campaigns       Campaign[]
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model Subscription {
+  id           String             @id @default(uuid())
+  userId       String
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan         PlanType
+  price        Decimal            @db.Decimal(12, 2)
+  status       SubscriptionStatus @default(PENDING_PAYMENT)
+  paymentRef   String?            @unique
+  startDate    DateTime?
+  expiresAt    DateTime?
+  
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  @@index([userId, status])
+}
+
+model Campaign {
+  id               String      @id @default(uuid())
+  companyId        String
+  company          CompanyProfile @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title            String
+  totalBudget      Decimal     @db.Decimal(12, 2)
+  spentBudget      Decimal     @default(0) @db.Decimal(12, 2)
+  platformFeeRate  Decimal     @default(0.15) @db.Decimal(4, 2) // 15% Frais SANDRINO
+  isFunded         Boolean     @default(false)
+  paymentRef       String?     @unique
+  missions         Mission[]
+
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+}
+
+model Mission {
+  id              String             @id @default(uuid())
+  campaignId      String?
+  campaign        Campaign?          @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  title           String
+  description     String             @db.Text
+  instructions    String             @db.Text
+  category        MissionCategory
+  rewardPerUser   Decimal            @db.Decimal(12, 2)
+  maxSubmissions  Int
+  currentSubmissions Int             @default(0)
+  targetCountry   String?            // "ALL" ou code ISO
+  requiredPlan    PlanType           @default(STARTER)
+  deadline        DateTime
+  isActive        Boolean            @default(true)
+
+  submissions     MissionSubmission[]
+
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+
+  @@index([isActive, deadline])
+}
+
+model MissionSubmission {
+  id           String           @id @default(uuid())
+  missionId    String
+  mission      Mission          @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status       SubmissionStatus @default(IN_PROGRESS)
+  proofData    String?          @db.Text // JSON ou texte (URL de capture, lien de travail, réponses)
+  adminNotes   String?          @db.Text
+  submittedAt  DateTime?
+  reviewedAt   DateTime?
+
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  @@unique([missionId, userId])
+}
+
+model Wallet {
+  id              String      @id @default(uuid())
+  userId          String      @unique
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  availableBalance Decimal    @default(0) @db.Decimal(12, 2)
+  pendingBalance   Decimal    @default(0) @db.Decimal(12, 2)
+  totalEarned      Decimal    @default(0) @db.Decimal(12, 2)
+  currency         String     @default("XOF")
+
+  transactions    Transaction[]
+
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+}
+
+model Transaction {
+  id           String            @id @default(uuid())
+  walletId     String
+  wallet       Wallet            @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  type         TransactionType
+  amount       Decimal           @db.Decimal(12, 2)
+  fee          Decimal           @default(0) @db.Decimal(12, 2)
+  status       TransactionStatus @default(PENDING)
+  reference    String            @unique
+  idempotencyKey String          @unique
+  description  String
+  metadata     Json?
+
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([walletId, status])
+  @@index([reference])
+}
+
+model WithdrawalRequest {
+  id           String              @id @default(uuid())
+  userId       String
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  amount       Decimal             @db.Decimal(12, 2)
+  fee          Decimal             @db.Decimal(12, 2)
+  netAmount    Decimal             @db.Decimal(12, 2)
+  provider     MobileMoneyProvider
+  phoneNumber  String
+  accountName  String
+  status       WithdrawalStatus    @default(REQUESTED)
+  reference    String              @unique
+  providerTxId String?
+  failureReason String?
+
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([userId, status])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  resource   String
+  ipAddress  String?
+  userAgent  String?
+  payload    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([action, createdAt])
+}
+import { PrismaClient, Prisma } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+export class WalletService {
+  /**
+   * Crédite de manière atomique une récompense de mission validée.
+   */
+  static async creditMissionReward(
+    userId: string,
+    submissionId: string,
+    amount: number,
+    missionTitle: string
+  ) {
+    const idempotencyKey = `REWARD_SUBMISSION_${submissionId}`;
+
+    return await prisma.$transaction(async (tx) => {
+      // 1. Vérification d'idempotence
+      const existingTx = await tx.transaction.findUnique({
+        where: { idempotencyKey },
+      });
+      if (existingTx) {
+        throw new Error('Transaction déjà traitée pour cette soumission.');
+      }
+
+      // 2. Verrouillage du portefeuille avec SELECT FOR UPDATE
+      const wallets = await tx.$queryRaw<Array<{ id: string; availableBalance: Prisma.Decimal; totalEarned: Prisma.Decimal }>>`
+        SELECT id, "availableBalance", "totalEarned"
+        FROM "Wallet"
+        WHERE "userId" = ${userId}
+        FOR UPDATE
+      `;
+
+      if (!wallets || wallets.length === 0) {
+        throw new Error(`Portefeuille introuvable pour l'utilisateur ${userId}`);
+      }
+
+      const wallet = wallets[0];
+      const decimalAmount = new Prisma.Decimal(amount);
+
+      // 3. Mise à jour des soldes
+      await tx.wallet.update({
+        where: { id: wallet.id },
+        data: {
+          availableBalance: { increment: decimalAmount },
+          totalEarned: { increment: decimalAmount },
+        },
+      });
+
+      // 4. Enregistrement de l'écriture comptable
+      const transaction = await tx.transaction.create({
+        data: {
+          walletId: wallet.id,
+          type: 'MISSION_REWARD',
+          amount: decimalAmount,
+          fee: new Prisma.Decimal(0),
+          status: 'COMPLETED',
+          reference: `REW-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+          idempotencyKey,
+          description: `Rémunération pour la mission : ${missionTitle}`,
+          metadata: { submissionId, missionTitle },
+        },
+      });
+
+      return transaction;
+    });
+  }
+
+  /**
+   * Déclenche une demande de retrait en débitant immédiatement le solde disponible
+   * pour éviter tout double retrait avant confirmation.
+   */
+  static async requestWithdrawal(
+    userId: string,
+    amount: number,
+    provider: 'TMONEY' | 'FLOOZ' | 'LEEKPAY' | 'ORANGE_MONEY' | 'MTN_MOMO',
+    phoneNumber: string,
+    accountName: string
+  ) {
+    const WITHDRAWAL_FEE_RATE = 0.02; // Frais de traitement 2%
+    const withdrawalAmount = new Prisma.Decimal(amount);
+    const fee = withdrawalAmount.mul(WITHDRAWAL_FEE_RATE);
+    const netAmount = withdrawalAmount.sub(fee);
+
+    if (amount < 1000) {
+      throw new Error('Le montant minimum de retrait est de 1 000 FCFA.');
+    }
+
+    return await prisma.$transaction(async (tx) => {
+      // Verrouillage du portefeuille
+      const wallets = await tx.$queryRaw<Array<{ id: string; availableBalance: Prisma.Decimal }>>`
+        SELECT id, "availableBalance"
+        FROM "Wallet"
+        WHERE "userId" = ${userId}
+        FOR UPDATE
+      `;
+
+      if (!wallets || wallets.length === 0) {
+        throw new Error('Portefeuille introuvable.');
+      }
+
+      const wallet = wallets[0];
+
+      if (wallet.availableBalance.lessThan(withdrawalAmount)) {
+        throw new Error('Solde disponible insuffisant pour effectuer ce retrait.');
+      }
+
+      // Débit immédiat du portefeuille
+      await tx.wallet.update({
+        where: { id: wallet.id },
+        data: {
+          availableBalance: { decrement: withdrawalAmount },
+        },
+      });
+
+      const reference = `WTH-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+      // Création de l'écriture en attente
+      await tx.transaction.create({
+        data: {
+          walletId: wallet.id,
+          type: 'WITHDRAWAL',
+          amount: withdrawalAmount,
+          fee,
+          status: 'PENDING',
+          reference,
+          idempotencyKey: `TX_${reference}`,
+          description: `Retrait vers ${provider} (${phoneNumber})`,
+          metadata: { provider, phoneNumber, accountName, netAmount: netAmount.toNumber() },
+        },
+      });
+
+      // Création de la demande formelle
+      const withdrawalRequest = await tx.withdrawalRequest.create({
+        data: {
+          userId,
+          amount: withdrawalAmount,
+          fee,
+          netAmount,
+          provider,
+          phoneNumber,
+          accountName,
+          status: 'REQUESTED',
+          reference,
+        },
+      });
+
+      return withdrawalRequest;
+    });
+  }
+}
+import crypto from 'crypto';
+
+export interface MobileMoneyChargeRequest {
+  reference: string;
+  amount: number;
+  currency: 'XOF' | 'XAF';
+  phoneNumber: string;
+  provider: 'TMONEY' | 'FLOOZ' | 'LEEKPAY';
+  description: string;
+  callbackUrl: string;
+}
+
+export class PaymentGatewayService {
+  private static leekpayApiUrl = process.env.LEEKPAY_BASE_URL || 'https://api.leekpay.com/v1';
+  private static leekpayApiKey = process.env.LEEKPAY_API_KEY;
+  private static webhookSecret = process.env.PAYMENT_WEBHOOK_SECRET;
+
+  /**
+   * Initialise un paiement entrant (souscription ou financement de campagne)
+   */
+  static async initiateCollection(data: MobileMoneyChargeRequest): Promise<{ paymentUrl?: string; reference: string }> {
+    if (!this.leekpayApiKey) {
+      throw new Error("Clé API de paiement non configurée (LEEKPAY_API_KEY manquante).");
+    }
+
+    const response = await fetch(`${this.leekpayApiUrl}/collections`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.leekpayApiKey}`,
+      },
+      body: JSON.stringify({
+        reference: data.reference,
+        amount: data.amount,
+        currency: data.currency,
+        phone_number: data.phoneNumber,
+        channel: data.provider.toLowerCase(),
+        description: data.description,
+        return_url: data.callbackUrl,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({}));
+      throw new Error(`Échec de l'initialisation du paiement: ${response.status} - ${JSON.stringify(errorPayload)}`);
+    }
+
+    const result = await response.json();
+    return {
+      paymentUrl: result.payment_url,
+      reference: data.reference,
+    };
+  }
+
+  /**
+   * Vérifie la signature cryptographique du Webhook opérateur (HMAC-SHA256)
+   */
+  static verifyWebhookSignature(rawBody: string, receivedSignature: string | null): boolean {
+    if (!this.webhookSecret || !receivedSignature) {
+      return false;
+    }
+
+    const computedSignature = crypto
+      .createHmac('sha256', this.webhookSecret)
+      .update(rawBody)
+      .digest('hex');
+
+    return crypto.timingSafeEqual(
+      Buffer.from(computedSignature, 'utf8'),
+      Buffer.from(receivedSignature, 'utf8')
+    );
+  }
+}
+import { NextRequest, NextResponse } from 'next/server';
+import { PaymentGatewayService } from '@/services/payment.gateway';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
+
+export async function POST(req: NextRequest) {
+  try {
+    const rawBody = await req.text();
+    const signature = req.headers.get('x-payment-signature');
+
+    const isValid = PaymentGatewayService.verifyWebhookSignature(rawBody, signature);
+    if (!isValid) {
+      return NextResponse.json({ error: 'Signature invalide' }, { status: 401 });
+    }
+
+    const event = JSON.parse(rawBody);
+    const { reference, status, eventType } = event; // Ex: 'CHARGE.SUCCESS'
+
+    if (eventType === 'CHARGE.SUCCESS' && status === 'COMPLETED') {
+      await prisma.$transaction(async (tx) => {
+        // Traiter selon la référence (ABONNEMENT ou CAMPAGNE)
+        if (reference.startsWith('SUB-')) {
+          const subscription = await tx.subscription.findUnique({
+            where: { paymentRef: reference },
+          });
+
+          if (subscription && subscription.status !== 'ACTIVE') {
+            const startDate = new Date();
+            const expiresAt = new Date();
+            expiresAt.setDate(startDate.getDate() + 7); // Durée 7 jours
+
+            await tx.subscription.update({
+              where: { id: subscription.id },
+              data: {
+                status: 'ACTIVE',
+                startDate,
+                expiresAt,
+              },
+            });
+          }
+        } else if (reference.startsWith('CMP-')) {
+          const campaign = await tx.campaign.findUnique({
+            where: { paymentRef: reference },
+          });
+
+          if (campaign && !campaign.isFunded) {
+            await tx.campaign.update({
+              where: { id: campaign.id },
+              data: { isFunded: true },
+            });
+          }
+        }
+      });
+    }
+
+    return NextResponse.json({ received: true });
+  } catch (error: any) {
+    console.error('Erreur webhook paiement:', error);
+    return NextResponse.json({ error: 'Erreur interne de traitement' }, { status: 500 });
+  }
+}
+import { PlanType, SubscriptionStatus } from '@prisma/client';
+
+export type PlatformFeature =
+  | 'DASHBOARD'
+  | 'DAILY_MISSIONS'
+  | 'ACTIVITY_HISTORY'
+  | 'SPONSORED_MISSIONS'
+  | 'WALLET'
+  | 'WITHDRAWALS'
+  | 'SUBSCRIPTIONS'
+  | 'REFERRAL'
+  | 'NOTIFICATIONS'
+  | 'SUPPORT';
+
+export const PLAN_FEATURES: Record<PlanType, PlatformFeature[]> = {
+  FREE: ['DASHBOARD'],
+  STARTER: ['DASHBOARD', 'DAILY_MISSIONS', 'ACTIVITY_HISTORY'],
+  PREMIUM: [
+    'DASHBOARD',
+    'DAILY_MISSIONS',
+    'ACTIVITY_HISTORY',
+    'SPONSORED_MISSIONS',
+    'WALLET',
+    'WITHDRAWALS',
+  ],
+  BUSINESS: [
+    'DASHBOARD',
+    'DAILY_MISSIONS',
+    'ACTIVITY_HISTORY',
+    'SPONSORED_MISSIONS',
+    'WALLET',
+    'WITHDRAWALS',
+    'SUBSCRIPTIONS',
+    'REFERRAL',
+    'NOTIFICATIONS',
+    'SUPPORT',
+  ],
+};
+
+/**
+ * Règle d'or : Même si l'abonnement expire, les retraits d'argent déjà validé
+ * restent impérativement autorisés.
+ */
+export function canAccessFeature(
+  feature: PlatformFeature,
+  currentPlan: PlanType | null,
+  status: SubscriptionStatus | null
+): boolean {
+  // Les retraits restent accessibles même sans abonnement actif si le membre a du solde
+  if (feature === 'WITHDRAWALS' || feature === 'WALLET') {
+    return true;
+  }
+
+  // Si aucun abonnement ou expiré, retour au niveau FREE
+  if (!currentPlan || status !== SubscriptionStatus.ACTIVE) {
+    return PLAN_FEATURES.FREE.includes(feature);
+  }
+
+  return PLAN_FEATURES[currentPlan]?.includes(feature) ?? false;
+}
+'use client';
+
+import React from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { ShieldCheck, User, Briefcase, Globe } from 'lucide-react';
+
+export default function Navbar() {
+  const pathname = usePathname();
+
+  return (
+    <nav className="sticky top-0 z-50 bg-slate-900 border-b border-slate-800 text-white shadow-md">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-16">
+          {/* Logo & Identité */}
+          <Link href="/" className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-blue-600 flex items-center justify-center font-black text-2xl tracking-wider text-white shadow-inner">
+              S
+            </div>
+            <div>
+              <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-white via-slate-100 to-emerald-400 bg-clip-text text-transparent">
+                SANDRINO
+              </span>
+              <p className="text-[10px] text-emerald-400 font-medium tracking-wide uppercase">
+                Apprends. Accomplis. Gagne.
+              </p>
+            </div>
+          </Link>
+
+          {/* Navigation Principale */}
+          <div className="hidden md:flex items-center space-x-6 text-sm font-medium">
+            <Link href="/missions" className="text-slate-300 hover:text-emerald-400 transition">
+              Missions
+            </Link>
+            <Link href="/pricing" className="text-slate-300 hover:text-emerald-400 transition">
+              Abonnements
+            </Link>
+            <Link href="/partners" className="text-slate-300 hover:text-emerald-400 transition">
+              Entreprises
+            </Link>
+            <Link href="/how-it-works" className="text-slate-300 hover:text-emerald-400 transition">
+              Comment ça fonctionne
+            </Link>
+          </div>
+
+          {/* Actions & Raccourcis */}
+          <div className="flex items-center gap-3">
+            <button className="flex items-center gap-1 text-xs text-slate-400 hover:text-white px-2 py-1 rounded border border-slate-800">
+              <Globe className="w-3.5 h-3.5" />
+              <span>FR</span>
+            </button>
+            <Link
+              href="/auth/signin"
+              className="text-sm font-medium text-slate-200 hover:text-white px-3 py-2 rounded-lg hover:bg-slate-800"
+            >
+              Connexion
+            </Link>
+            <Link
+              href="/auth/signup"
+              className="text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-lg transition shadow-lg shadow-emerald-900/20"
+            >
+              Créer un compte
+            </Link>
+          </div>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+ import React from 'react';
+import { PrismaClient } from '@prisma/client';
+import { Wallet, CheckCircle, Clock, Award, ShieldAlert, ArrowUpRight } from 'lucide-react';
+import Link from 'next/link';
+
+const prisma = new PrismaClient();
+
+async function getMemberData(userId: string) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: {
+      wallet: true,
+      subscriptions: {
+        where: { status: 'ACTIVE' },
+        orderBy: { createdAt: 'desc' },
+        take: 1,
+      },
+      submissions: {
+        include: { mission: true },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      },
+    },
+  });
+
+  const availableMissionsCount = await prisma.mission.count({
+    where: { isActive: true },
+  });
+
+  return { user, availableMissionsCount };
+}
+
+export default async function DashboardPage() {
+  // Récupération de la session utilisateur réelle
+  const currentUserId = 'EXEMPLE_USER_UUID'; // Remplacé dynamiquement par la session (NextAuth)
+  const { user, availableMissionsCount } = await getMemberData(currentUserId);
+
+  const activeSub = user?.subscriptions[0];
+  const wallet = user?.wallet;
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-10">
+      <div className="max-w-7xl mx-auto space-y-8">
+        {/* En-tête du profil */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-6 bg-slate-900 border border-slate-800 rounded-2xl shadow-xl">
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 rounded-full bg-slate-800 border-2 border-emerald-500 flex items-center justify-center text-xl font-bold text-white">
+              {user?.fullName?.charAt(0) || 'U'}
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-white">{user?.fullName}</h1>
+              <p className="text-sm text-slate-400">
+                Pays : <span className="text-slate-200 font-semibold">{user?.country}</span> | Réf :{' '}
+                <span className="text-emerald-400 font-mono">{user?.referralCode}</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col md:items-end">
+            <span className="text-xs uppercase tracking-wider text-slate-400">Formule active</span>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="px-3 py-1 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-sm font-bold rounded-full">
+                {activeSub ? activeSub.plan : 'GRATUIT (FREE)'}
+              </span>
+              {activeSub?.expiresAt && (
+                <span className="text-xs text-slate-400">
+                  Expire le {new Date(activeSub.expiresAt).toLocaleDateString('fr-FR')}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Métriques du portefeuille & Récompenses */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl relative overflow-hidden">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm font-medium text-slate-400">Solde disponible</p>
+                <h3 className="text-3xl font-extrabold text-white mt-2">
+                  {wallet?.availableBalance ? Number(wallet.availableBalance).toLocaleString('fr-FR') : '0'}{' '}
+                  <span className="text-emerald-400 text-lg">FCFA</span>
+                </h3>
+              </div>
+              <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl">
+                <Wallet className="w-6 h-6" />
+              </div>
+            </div>
+            <div className="mt-4">
+              <Link
+                href="/dashboard/withdraw"
+                className="inline-flex items-center gap-1 text-sm font-semibold text-emerald-400 hover:text-emerald-300"
+              >
+                Demander un retrait <ArrowUpRight className="w-4 h-4" />
+              </Link>
+            </div>
+          </div>
+
+          <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm font-medium text-slate-400">Gains cumulés</p>
+                <h3 className="text-3xl font-extrabold text-white mt-2">
+                  {wallet?.totalEarned ? Number(wallet.totalEarned).toLocaleString('fr-FR') : '0'}{' '}
+                  <span className="text-slate-400 text-lg">FCFA</span>
+                </h3>
+              </div>
+              <div className="p-3 bg-blue-500/10 text-blue-400 rounded-xl">
+                <Award className="w-6 h-6" />
+              </div>
+            </div>
+            <p className="text-xs text-slate-400 mt-4">Cumul vérifié des missions approuvées</p>
+          </div>
+
+          <div className="p-6 bg-slate-900 border border-slate-800 rounded-2xl">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-sm font-medium text-slate-400">Missions disponibles</p>
+                <h3 className="text-3xl font-extrabold text-white mt-2">{availableMissionsCount}</h3>
+              </div>
+              <div className="p-3 bg-purple-500/10 text-purple-400 rounded-xl">
+                <CheckCircle className="w-6 h-6" />
+              </div>
+            </div>
+            <div className="mt-4">
+              <Link
+                href="/dashboard/missions"
+                className="inline-flex items-center gap-1 text-sm font-semibold text-purple-400 hover:text-purple-300"
+              >
+                Explorer le catalogue <ArrowUpRight className="w-4 h-4" />
+              </Link>
+            </div>
+          </div>
+        </div>
+
+        {/* Dernières activités */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+          <h2 className="text-lg font-bold text-white mb-4">Activités récentes</h2>
+          <div className="divide-y divide-slate-800">
+            {user?.submissions && user.submissions.length > 0 ? (
+              user.submissions.map((sub) => (
+                <div key={sub.id} className="py-4 flex items-center justify-between">
+                  <div>
+                    <p className="font-semibold text-white">{sub.mission.title}</p>
+                    <p className="text-xs text-slate-400">
+                      Rémunération promise : {Number(sub.mission.rewardPerUser).toLocaleString('fr-FR')} FCFA
+                    </p>
+                  </div>
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-bold ${
+                      sub.status === 'APPROVED'
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : sub.status === 'REJECTED'
+                        ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                    }`}
+                  >
+                    {sub.status}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p className="text-slate-500 text-sm py-4">Aucune mission accomplie pour le moment.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+# Base de données (PostgreSQL 14+)
+DATABASE_URL="postgresql://sandrino_user:VOTRE_MOT_DE_PASSE_SECURISE@localhost:5432/sandrino_db?schema=public"
+
+# Clés de session & d'authentification
+NEXTAUTH_SECRET="GENERER_UNE_CLE_ALEATOIRE_32_CHARS_MINIMUM_HEX_OU_BASE64"
+NEXTAUTH_URL="https://sandrino.com"
+
+# Passerelle LeekPay & Mobile Money
+LEEKPAY_BASE_URL="https://api.leekpay.com/v1"
+LEEKPAY_API_KEY="leek_live_votre_cle_secrete_fournie_par_leekpay"
+PAYMENT_WEBHOOK_SECRET="whsec_cle_secrete_de_signature_du_fournisseur"
+
+# Configuration SMTP pour alertes transactionnelles
+SMTP_HOST="smtp.mailprovider.com"
+SMTP_PORT="587"
+SMTP_USER="notifications@sandrino.com"
+SMTP_PASS="mot_de_passe_smtp"
+npx prisma generate
+npx prisma migrate deploy
